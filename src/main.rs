@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) NVIDIA CORPORATION
 
+mod addon;
 mod config;
 mod daemon;
 mod execute;
@@ -99,6 +100,10 @@ fn main() {
     kmsg::kernlog_setup();
     syslog::poll();
     init.process_kernel_params(None);
+
+    // Mount addon images before kata-agent; before disable_modules_loading()
+    // so dm-verity/erofs can still be loaded if built as modules.
+    addon::mount_all();
 
     let detected = mode::detect();
     match detected.mode {
