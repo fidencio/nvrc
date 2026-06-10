@@ -7,12 +7,13 @@
 //! can discover and mount GPU devices without needing the legacy hook.
 
 use crate::execute::foreground;
+use crate::gpu;
 
 const NVIDIA_CTK: &str = "/bin/nvidia-ctk";
 
 /// Run nvidia-ctk with given arguments.
 fn ctk(args: &[&str]) {
-    foreground(NVIDIA_CTK, args);
+    foreground(&gpu::resolve(NVIDIA_CTK), args);
 }
 
 /// Generate CDI spec for GPU device discovery.

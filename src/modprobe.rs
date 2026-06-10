@@ -1,17 +1,35 @@
 use std::fs;
 
 use crate::execute::foreground;
+use crate::gpu;
 
 const MODPROBE: &str = "/sbin/modprobe";
 
 /// Load a kernel module via modprobe.
 /// For nvidia, automatically disables NVLink when only one GPU is present.
+/// NVIDIA modules are loaded from the `gpu` addon (via `--dirname`) when it is
+/// present; in-tree modules always come from the rootfs `/lib/modules`.
 pub fn load(module: &str) {
-    let mut args = vec![module];
-    if module == "nvidia" && count_nvidia_gpus_from("/sys/bus/pci/devices") == 1 {
-        args.push("NVreg_NvLinkDisable=1");
+    let single_gpu = module == "nvidia" && count_nvidia_gpus_from("/sys/bus/pci/devices") == 1;
+    let dirname = gpu::modprobe_dirname(module);
+    let args = build_args(module, dirname.as_deref(), single_gpu);
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    foreground(MODPROBE, &arg_refs);
+}
+
+/// Build the modprobe argument list: optional `--dirname <root>` (addon
+/// modules), the module name, then any module parameters.
+fn build_args(module: &str, dirname: Option<&str>, single_gpu: bool) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(dir) = dirname {
+        args.push("--dirname".to_owned());
+        args.push(dir.to_owned());
     }
-    foreground(MODPROBE, &args);
+    args.push(module.to_owned());
+    if single_gpu {
+        args.push("NVreg_NvLinkDisable=1".to_owned());
+    }
+    args
 }
 
 fn count_nvidia_gpus_from(pci_path: &str) -> usize {
@@ -54,6 +72,42 @@ mod tests {
             load("nonexistent_module_xyz123");
         });
         assert!(result.is_err());
+    }
+
+    // === build_args ===
+
+    #[test]
+    fn test_build_args_plain() {
+        assert_eq!(build_args("erofs", None, false), vec!["erofs"]);
+    }
+
+    #[test]
+    fn test_build_args_single_gpu() {
+        assert_eq!(
+            build_args("nvidia", None, true),
+            vec!["nvidia", "NVreg_NvLinkDisable=1"]
+        );
+    }
+
+    #[test]
+    fn test_build_args_addon_dirname() {
+        assert_eq!(
+            build_args("nvidia", Some("/run/kata-addons/gpu"), false),
+            vec!["--dirname", "/run/kata-addons/gpu", "nvidia"]
+        );
+    }
+
+    #[test]
+    fn test_build_args_addon_dirname_single_gpu() {
+        assert_eq!(
+            build_args("nvidia", Some("/run/kata-addons/gpu"), true),
+            vec![
+                "--dirname",
+                "/run/kata-addons/gpu",
+                "nvidia",
+                "NVreg_NvLinkDisable=1"
+            ]
+        );
     }
 
     fn create_pci_device(tmpdir: &TempDir, name: &str, vendor: &str, class: &str) {

@@ -5,6 +5,7 @@ mod addon;
 mod config;
 mod daemon;
 mod execute;
+mod gpu;
 mod infiniband;
 mod kata_agent;
 mod kernel_params;
@@ -104,6 +105,11 @@ fn main() {
     // Mount addon images before kata-agent; before disable_modules_loading()
     // so dm-verity/erofs can still be loaded if built as modules.
     addon::mount_all();
+
+    // With composable images the GPU userspace ships in the `gpu` addon mounted
+    // above. Expose its libraries/firmware before any driver load or daemon
+    // launch. No-op for the monolithic image (no addon mounted).
+    gpu::setup();
 
     let detected = mode::detect();
     match detected.mode {
