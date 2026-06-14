@@ -10,7 +10,7 @@
 //! resolves those components from the addon mount instead of the rootfs:
 //!
 //! - binaries: exec'd from `<root>/bin` and `<root>/sbin`
-//! - libraries: `LD_LIBRARY_PATH=<root>/lib:<root>/usr/lib`
+//! - libraries: `LD_LIBRARY_PATH=<root>/usr/lib`
 //! - kernel modules: `modprobe --dirname <root>` (the addon ships its own
 //!   `lib/modules/<ver>/modules.dep`)
 //! - configs: read from `<root>/usr/share/nvidia/...`
@@ -67,25 +67,53 @@ fn modprobe_dirname_in(present: bool, root: &str, module: &str) -> Option<String
     (present && module.starts_with("nvidia")).then(|| root.to_owned())
 }
 
-/// Library directories `nvidia-ctk cdi generate` should search for the GPU
-/// driver libraries. Unlike the dynamic loader, nvidia-ctk does not honour
+/// Library directory `nvidia-ctk cdi generate` should search for the GPU driver
+/// libraries. Unlike the dynamic loader, nvidia-ctk does not honour
 /// `LD_LIBRARY_PATH`: it discovers driver libraries via the ldcache and a set
 /// of standard paths. With composable images the GPU userspace lives in the
-/// addon (not on a standard path, and absent from the read-only base's
-/// ldcache), so the addon lib dirs must be passed explicitly via
-/// `--library-search-path`. Empty without the addon: the monolithic image keeps
-/// its libraries on the canonical paths already covered by the ldcache.
+/// addon (not on a standard path, and the loader-less addon ships no ldcache),
+/// so the addon lib dir must be passed explicitly via `--library-search-path`.
+/// Empty without the addon: the monolithic image keeps its libraries on the
+/// canonical paths already covered by the ldcache.
 pub fn library_search_paths() -> Vec<String> {
     library_search_paths_in(present(), ROOT)
 }
 
 fn library_search_paths_in(present: bool, root: &str) -> Vec<String> {
     if present {
-        vec![format!("{root}/lib"), format!("{root}/usr/lib")]
+        vec![format!("{root}/usr/lib")]
     } else {
         Vec::new()
     }
 }
+
+/// Driver root to pass to `nvidia-ctk cdi generate` via `--driver-root`.
+///
+/// nvidia-ctk records each driver library's in-container mount path as its host
+/// path with the driver root stripped (`RelativeToRoot`). With composable images
+/// the GPU libraries live at `<root>/usr/lib`; passing `<root>` as the driver
+/// root makes them land at the canonical `/usr/lib` inside the container instead
+/// of the addon path. Apps that scan `/usr` for the driver (e.g. NVIDIA NIM,
+/// which bails with "libnvidia-ml.so.1 not found under /usr") then find it.
+///
+/// The driver root also governs device-node discovery, whose default root is the
+/// driver root; but the `/dev/nvidia*` nodes are real guest device nodes, not in
+/// the addon, so the caller must pair this with `--dev-root=/` ([`DEV_ROOT`]).
+/// `None` without the addon: the monolithic image keeps the canonical `/` root.
+pub fn driver_root() -> Option<String> {
+    driver_root_in(present(), ROOT)
+}
+
+fn driver_root_in(present: bool, root: &str) -> Option<String> {
+    present.then(|| root.to_owned())
+}
+
+/// Device-node root for `nvidia-ctk cdi generate` (`--dev-root`). The GPU device
+/// nodes (`/dev/nvidia*`) are real guest nodes, so they always live at `/`,
+/// regardless of where the driver libraries are mounted. Pair with
+/// [`driver_root`], whose strip would otherwise make device discovery look under
+/// the addon and drop every GPU node from the spec.
+pub const DEV_ROOT: &str = "/";
 
 /// Path to the `nvidia-cdi-hook` binary that `nvidia-ctk cdi generate` records
 /// in the generated CDI spec's `createContainer` hooks. The kata-agent runs
@@ -114,7 +142,7 @@ pub fn setup() {
         return;
     }
 
-    let lib_path = format!("{ROOT}/lib:{ROOT}/usr/lib");
+    let lib_path = format!("{ROOT}/usr/lib");
     // Safe: NVRC sets this before spawning any GPU daemon and the only other
     // thread (syslog poller) does not touch the environment.
     std::env::set_var("LD_LIBRARY_PATH", &lib_path);
@@ -212,16 +240,28 @@ mod tests {
     fn test_library_search_paths_with_addon() {
         assert_eq!(
             library_search_paths_in(true, "/run/kata-addons/gpu"),
-            vec![
-                "/run/kata-addons/gpu/lib".to_owned(),
-                "/run/kata-addons/gpu/usr/lib".to_owned(),
-            ]
+            vec!["/run/kata-addons/gpu/usr/lib".to_owned()]
         );
     }
 
     #[test]
     fn test_library_search_paths_without_addon() {
         assert!(library_search_paths_in(false, "/run/kata-addons/gpu").is_empty());
+    }
+
+    // === driver_root ===
+
+    #[test]
+    fn test_driver_root_with_addon() {
+        assert_eq!(
+            driver_root_in(true, "/run/kata-addons/gpu"),
+            Some("/run/kata-addons/gpu".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_driver_root_without_addon() {
+        assert_eq!(driver_root_in(false, "/run/kata-addons/gpu"), None);
     }
 
     // === cdi_hook_path ===
