@@ -87,6 +87,25 @@ fn library_search_paths_in(present: bool, root: &str) -> Vec<String> {
     }
 }
 
+/// Path to the `nvidia-cdi-hook` binary that `nvidia-ctk cdi generate` records
+/// in the generated CDI spec's `createContainer` hooks. The kata-agent runs
+/// those hooks (create-symlinks, update-ldcache, enable-cuda-compat, ...) from
+/// the guest rootfs. nvidia-ctk defaults the hook path to `/usr/bin`, but with
+/// composable images `nvidia-cdi-hook` lives in the addon
+/// (`<root>/bin/nvidia-cdi-hook`) and is stripped from the read-only base, so
+/// the default path does not exist and every hook silently no-ops -- the
+/// container then never gets its libcuda.so.1 symlink or ldcache entry and CUDA
+/// falls back to the image's cuda-compat driver. Pass the addon path via
+/// `--nvidia-cdi-hook-path` so the hooks resolve. `None` without the addon: the
+/// monolithic image keeps the binary at the canonical `/usr/bin` default.
+pub fn cdi_hook_path() -> Option<String> {
+    cdi_hook_path_in(present(), ROOT)
+}
+
+fn cdi_hook_path_in(present: bool, root: &str) -> Option<String> {
+    present.then(|| format!("{root}/bin/nvidia-cdi-hook"))
+}
+
 /// Prepare the environment for GPU components: expose the addon libraries via
 /// `LD_LIBRARY_PATH` (inherited by every daemon NVRC spawns) and bind the addon
 /// firmware onto the canonical path. No-op without the addon.
@@ -203,6 +222,21 @@ mod tests {
     #[test]
     fn test_library_search_paths_without_addon() {
         assert!(library_search_paths_in(false, "/run/kata-addons/gpu").is_empty());
+    }
+
+    // === cdi_hook_path ===
+
+    #[test]
+    fn test_cdi_hook_path_with_addon() {
+        assert_eq!(
+            cdi_hook_path_in(true, "/run/kata-addons/gpu"),
+            Some("/run/kata-addons/gpu/bin/nvidia-cdi-hook".to_owned())
+        );
+    }
+
+    #[test]
+    fn test_cdi_hook_path_without_addon() {
+        assert_eq!(cdi_hook_path_in(false, "/run/kata-addons/gpu"), None);
     }
 
     // === bind_dir (needs root for mount(2)) ===
