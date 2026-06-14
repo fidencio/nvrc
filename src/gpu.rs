@@ -134,6 +134,32 @@ fn cdi_hook_path_in(present: bool, root: &str) -> Option<String> {
     present.then(|| format!("{root}/bin/nvidia-cdi-hook"))
 }
 
+/// Variant name kata-agent selects in the CoCo addon manifest to launch the
+/// NVIDIA-attester attestation-agent (`attestation-agent-nv`). Matches the
+/// `[process.variants.nvidia]` key in the addon's `components.toml`.
+pub const ATTESTER_VARIANT_NVIDIA: &str = "nvidia";
+
+/// Attester variant kata-agent should select for the CoCo addon's
+/// attestation-agent, injected via the `KATA_ATTESTER_VARIANT` env var (see
+/// [`crate::kata_agent`]).
+///
+/// When the GPU addon is present the GPU must be attested. The stock
+/// attestation-agent only collects TEE (SNP/TDX) evidence, so the KBS never
+/// receives a `gpu0` submodule and a GPU attestation policy
+/// (`submods.gpu0["ear.status"] == "affirming"`) can never pass. The addon
+/// ships a second binary built with the `nvidia-attester` feature that does
+/// collect GPU evidence; selecting the `nvidia` variant launches it.
+///
+/// `None` without the addon: there is no GPU to attest, so kata-agent keeps its
+/// default (stock) attester.
+pub fn attester_variant() -> Option<&'static str> {
+    attester_variant_in(present())
+}
+
+fn attester_variant_in(present: bool) -> Option<&'static str> {
+    present.then(|| ATTESTER_VARIANT_NVIDIA)
+}
+
 /// Prepare the environment for GPU components: expose the addon libraries via
 /// `LD_LIBRARY_PATH` (inherited by every daemon NVRC spawns) and bind the addon
 /// firmware onto the canonical path. No-op without the addon.
@@ -277,6 +303,18 @@ mod tests {
     #[test]
     fn test_cdi_hook_path_without_addon() {
         assert_eq!(cdi_hook_path_in(false, "/run/kata-addons/gpu"), None);
+    }
+
+    // === attester_variant ===
+
+    #[test]
+    fn test_attester_variant_with_addon() {
+        assert_eq!(attester_variant_in(true), Some(ATTESTER_VARIANT_NVIDIA));
+    }
+
+    #[test]
+    fn test_attester_variant_without_addon() {
+        assert_eq!(attester_variant_in(false), None);
     }
 
     // === bind_dir (needs root for mount(2)) ===
