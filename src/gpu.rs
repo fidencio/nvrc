@@ -67,6 +67,26 @@ fn modprobe_dirname_in(present: bool, root: &str, module: &str) -> Option<String
     (present && module.starts_with("nvidia")).then(|| root.to_owned())
 }
 
+/// Library directories `nvidia-ctk cdi generate` should search for the GPU
+/// driver libraries. Unlike the dynamic loader, nvidia-ctk does not honour
+/// `LD_LIBRARY_PATH`: it discovers driver libraries via the ldcache and a set
+/// of standard paths. With composable images the GPU userspace lives in the
+/// addon (not on a standard path, and absent from the read-only base's
+/// ldcache), so the addon lib dirs must be passed explicitly via
+/// `--library-search-path`. Empty without the addon: the monolithic image keeps
+/// its libraries on the canonical paths already covered by the ldcache.
+pub fn library_search_paths() -> Vec<String> {
+    library_search_paths_in(present(), ROOT)
+}
+
+fn library_search_paths_in(present: bool, root: &str) -> Vec<String> {
+    if present {
+        vec![format!("{root}/lib"), format!("{root}/usr/lib")]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Prepare the environment for GPU components: expose the addon libraries via
 /// `LD_LIBRARY_PATH` (inherited by every daemon NVRC spawns) and bind the addon
 /// firmware onto the canonical path. No-op without the addon.
@@ -165,6 +185,24 @@ mod tests {
         // In-tree modules ship in the base image, not the addon.
         assert_eq!(modprobe_dirname_in(true, "/run/kata-addons/gpu", "ib_umad"), None);
         assert_eq!(modprobe_dirname_in(true, "/run/kata-addons/gpu", "mlx5_ib"), None);
+    }
+
+    // === library_search_paths ===
+
+    #[test]
+    fn test_library_search_paths_with_addon() {
+        assert_eq!(
+            library_search_paths_in(true, "/run/kata-addons/gpu"),
+            vec![
+                "/run/kata-addons/gpu/lib".to_owned(),
+                "/run/kata-addons/gpu/usr/lib".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_library_search_paths_without_addon() {
+        assert!(library_search_paths_in(false, "/run/kata-addons/gpu").is_empty());
     }
 
     // === bind_dir (needs root for mount(2)) ===

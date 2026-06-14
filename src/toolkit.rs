@@ -20,8 +20,24 @@ fn ctk(args: &[&str]) {
 /// CDI allows container runtimes (containerd, CRI-O) to inject GPU devices
 /// without nvidia-docker. The spec is written to /var/run/cdi/nvidia.yaml
 /// where runtimes expect to find it.
+///
+/// nvidia-ctk does not honour `LD_LIBRARY_PATH`; it locates the driver
+/// libraries to mount via the ldcache and standard paths. With composable
+/// images the GPU libraries live in the addon, so pass the addon lib dirs via
+/// `--library-search-path` (a no-op for the monolithic image, where
+/// [`gpu::library_search_paths`] is empty and the ldcache already covers them).
 pub fn nvidia_ctk_cdi() {
-    ctk(&["-d", "cdi", "generate", "--output=/var/run/cdi/nvidia.yaml"]);
+    let mut args: Vec<String> = vec![
+        "-d".to_owned(),
+        "cdi".to_owned(),
+        "generate".to_owned(),
+        "--output=/var/run/cdi/nvidia.yaml".to_owned(),
+    ];
+    for path in gpu::library_search_paths() {
+        args.push(format!("--library-search-path={path}"));
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    ctk(&arg_refs);
 }
 
 #[cfg(test)]
